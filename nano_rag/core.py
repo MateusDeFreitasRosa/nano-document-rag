@@ -5,7 +5,7 @@ from .clusterizer import Clusterizer
 from .storage import Storage
 
 class NanoRAG:
-    def __init__(self, document_id, storage_dir="."):
+    def __init__(self, document_id, storage_dir=".", n_clusters=None):
         """
         Inicializa o NanoRAG para um documento específico.
         
@@ -13,9 +13,11 @@ class NanoRAG:
             document_id: Identificador único do documento (ex: 'manual_tecnico').
                          Isso gerará '{document_id}.vlog' e '{document_id}.json'.
             storage_dir: Diretório onde os arquivos de índice serão armazenados.
+            n_clusters: Quantidade de clusters (K). Se None, será calculado automaticamente como sqrt(N).
         """
         self.document_id = document_id
         self.storage_dir = storage_dir
+        self.n_clusters = n_clusters
         
         if storage_dir != "." and not os.path.exists(storage_dir):
             os.makedirs(storage_dir)
@@ -24,18 +26,34 @@ class NanoRAG:
         self.metadata_path = os.path.join(storage_dir, f"{document_id}.json")
         
         self.storage = Storage(self.index_path)
-        self.clusterizer = Clusterizer(k=10) # Default K, can be tuned
+        # O K será definido dinamicamente no momento da indexação se n_clusters for None
+        initial_k = n_clusters if n_clusters is not None else 1
+        self.clusterizer = Clusterizer(k=initial_k)
         self.metadata = {}
 
     def index(self, embeddings, contents, metadatas=None):
         """
-        Gera o índice vetorial para este documento.
+        Gera o índice vetorial para este documento com cálculo automático de clusters.
         
         Args:
             embeddings: Lista de vetores (List[List[float]])
             contents: Lista de strings (List[str])
             metadatas: Lista opcional de dicionários de metadados (List[dict])
         """
+        if not embeddings:
+            return
+
+        # Cálculo automático do número de clusters (K)
+        # Heurística: K = sqrt(N), onde N é o número de chunks
+        if self.n_clusters is None:
+            import math
+            n_samples = len(embeddings)
+            # Garante pelo menos 1 cluster e no máximo o número de amostras
+            k_auto = int(math.sqrt(n_samples))
+            self.clusterizer.k = max(1, k_auto)
+        else:
+            self.clusterizer.k = self.n_clusters
+
         if len(embeddings) != len(contents):
             raise ValueError("As listas de embeddings e contents devem ter o mesmo tamanho.")
         
