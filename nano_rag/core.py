@@ -5,11 +5,20 @@ from .clusterizer import Clusterizer
 from .storage import Storage
 
 class NanoRAG:
-    def __init__(self, index_path="index.vlog", metadata_path="metadata.json"):
-        self.storage = Storage(index_path)
+    def __init__(self, db_name="vector_db"):
+        """
+        Inicializa o NanoRAG.
+        
+        Args:
+            db_name: Nome base para os arquivos de banco de dados (ex: 'meu_banco').
+                     Isso gerará 'meu_banco.vlog' e 'meu_banco.json'.
+        """
+        self.db_name = db_name
+        self.index_path = f"{db_name}.vlog"
+        self.metadata_path = f"{db_name}.json"
+        
+        self.storage = Storage(self.index_path)
         self.clusterizer = Clusterizer(k=10) # Default K, can be tuned
-        self.index_path = index_path
-        self.metadata_path = metadata_path
         self.metadata = {}
 
     def insert(self, documents):

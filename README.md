@@ -34,7 +34,7 @@ embeddings = [[0.1, 0.2, ...], [0.3, 0.4, ...]]
 contents = ["Texto do chunk 1", "Texto do chunk 2"]
 metadatas = [{"source": "doc1.pdf"}, {"source": "doc2.pdf"}] # Opcional
 
-rag = NanoRAG()
+rag = NanoRAG(db_name="meu_banco")
 rag.fit(embeddings, contents, metadatas)
 ```
 
@@ -42,6 +42,7 @@ rag.fit(embeddings, contents, metadatas)
 Ideal quando você já tem os objetos estruturados.
 
 ```python
+rag = NanoRAG(db_name="meu_banco")
 documents = [
     {
         "content": "O céu é azul.",
@@ -58,6 +59,9 @@ rag.insert(documents)
 Para buscar, você deve fornecer o **vetor** da sua query. A biblioteca não converte texto em vetor.
 
 ```python
+# Carrega o banco pelo nome (procura meu_banco.vlog e meu_banco.json)
+rag = NanoRAG(db_name="meu_banco")
+
 # Vetor da query (gerado pelo mesmo modelo usado na indexação)
 query_vector = [0.15, 0.25, 0.75, ...] 
 
@@ -72,5 +76,5 @@ for res in results:
 
 ## Estrutura de Arquivos
 
-*   `index.vlog`: Arquivo binário contendo os vetores e centróides.
-*   `metadata.json`: Arquivo JSON mapeando IDs de vetores para o conteúdo textual.
+*   `{db_name}.vlog`: Arquivo binário contendo os vetores e centróides.
+*   `{db_name}.json`: Arquivo JSON mapeando IDs de vetores para o conteúdo textual.
