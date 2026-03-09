@@ -5,42 +5,31 @@ from .clusterizer import Clusterizer
 from .storage import Storage
 
 class NanoRAG:
-    def __init__(self, db_name="vector_db"):
+    def __init__(self, document_id, storage_dir="."):
         """
-        Inicializa o NanoRAG.
+        Inicializa o NanoRAG para um documento específico.
         
         Args:
-            db_name: Nome base para os arquivos de banco de dados (ex: 'meu_banco').
-                     Isso gerará 'meu_banco.vlog' e 'meu_banco.json'.
+            document_id: Identificador único do documento (ex: 'manual_tecnico').
+                         Isso gerará '{document_id}.vlog' e '{document_id}.json'.
+            storage_dir: Diretório onde os arquivos de índice serão armazenados.
         """
-        self.db_name = db_name
-        self.index_path = f"{db_name}.vlog"
-        self.metadata_path = f"{db_name}.json"
+        self.document_id = document_id
+        self.storage_dir = storage_dir
+        
+        if storage_dir != "." and not os.path.exists(storage_dir):
+            os.makedirs(storage_dir)
+
+        self.index_path = os.path.join(storage_dir, f"{document_id}.vlog")
+        self.metadata_path = os.path.join(storage_dir, f"{document_id}.json")
         
         self.storage = Storage(self.index_path)
         self.clusterizer = Clusterizer(k=10) # Default K, can be tuned
         self.metadata = {}
 
-    def insert(self, documents):
+    def index(self, embeddings, contents, metadatas=None):
         """
-        Insere uma lista de documentos já processados.
-        
-        Args:
-            documents: Lista de dicts, onde cada dict tem:
-                - 'embedding': List[float]
-                - 'content': str
-                - 'metadata': dict (opcional)
-        """
-        if not documents:
-            print("Nenhum documento fornecido.")
-            return
-
-        embeddings = [doc['embedding'] for doc in documents]
-        self._build_index(embeddings, documents)
-
-    def fit(self, embeddings, contents, metadatas=None):
-        """
-        Método facilitador para indexação em lote.
+        Gera o índice vetorial para este documento.
         
         Args:
             embeddings: Lista de vetores (List[List[float]])
@@ -65,19 +54,19 @@ class NanoRAG:
         self._build_index(embeddings, documents)
 
     def _build_index(self, embeddings, documents):
-        """Internal method to build and save the index."""
+        """Método interno para construir e salvar o índice do documento."""
         if not embeddings:
             return
 
         dim = len(embeddings[0])
-        print(f"Dimensão do embedding: {dim}")
+        print(f"Documento: {self.document_id} | Dimensão: {dim}")
 
         # 1. Cluster
-        print("Clusterizando...")
+        print(f"Clusterizando {len(embeddings)} vetores...")
         centroids, clusters = self.clusterizer.fit(embeddings)
         
         # 2. Save Index (Binary)
-        print("Salvando índice binário...")
+        print("Salvando índice binário (.vlog)...")
         
         ordered_metadata = {}
         current_idx = 0
@@ -96,21 +85,19 @@ class NanoRAG:
         self.storage.save(dim, centroids, clusters)
 
         # 3. Save Metadata
-        print("Salvando metadados...")
+        print("Salvando metadados (.json)...")
         with open(self.metadata_path, "w", encoding="utf-8") as f:
             json.dump(ordered_metadata, f, ensure_ascii=False, indent=2)
             
-        print("Indexação concluída.")
+        print(f"Indexação do documento '{self.document_id}' concluída.")
 
-    def query(self, query_vector, top_k=3):
+    def search(self, query_vector, top_k=3):
         """
-        Performs the 2-step search:
-        1. Find closest centroid.
-        2. Search vectors within that cluster.
+        Busca os trechos mais similares dentro deste documento.
         
         Args:
-            query_vector: List[float] representing the query embedding.
-            top_k: Number of results to return.
+            query_vector: Vetor da query (List[float]).
+            top_k: Número de resultados.
         """
         # 1. Load Centroids
         centroids = self.storage.load_centroids()
