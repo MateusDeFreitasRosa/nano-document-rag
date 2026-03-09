@@ -14,35 +14,62 @@ class NanoRAG:
 
     def insert(self, documents):
         """
-        Processes documents, clusters them, and saves the index.
+        Insere uma lista de documentos já processados.
         
         Args:
-            documents: List of dicts, where each dict has:
+            documents: Lista de dicts, onde cada dict tem:
                 - 'embedding': List[float]
                 - 'content': str
-                - 'metadata': dict (optional)
+                - 'metadata': dict (opcional)
         """
         if not documents:
-            print("No documents provided.")
+            print("Nenhum documento fornecido.")
             return
 
         embeddings = [doc['embedding'] for doc in documents]
+        self._build_index(embeddings, documents)
+
+    def fit(self, embeddings, contents, metadatas=None):
+        """
+        Método facilitador para indexação em lote.
         
+        Args:
+            embeddings: Lista de vetores (List[List[float]])
+            contents: Lista de strings (List[str])
+            metadatas: Lista opcional de dicionários de metadados (List[dict])
+        """
+        if len(embeddings) != len(contents):
+            raise ValueError("As listas de embeddings e contents devem ter o mesmo tamanho.")
+        
+        if metadatas and len(metadatas) != len(embeddings):
+            raise ValueError("A lista de metadatas deve ter o mesmo tamanho das outras, se fornecida.")
+
+        documents = []
+        for i in range(len(embeddings)):
+            doc = {
+                "embedding": embeddings[i],
+                "content": contents[i],
+                "metadata": metadatas[i] if metadatas else {}
+            }
+            documents.append(doc)
+        
+        self._build_index(embeddings, documents)
+
+    def _build_index(self, embeddings, documents):
+        """Internal method to build and save the index."""
         if not embeddings:
-            print("No embeddings found.")
             return
 
         dim = len(embeddings[0])
-        print(f"Embedding dimension: {dim}")
+        print(f"Dimensão do embedding: {dim}")
 
         # 1. Cluster
-        print("Clustering...")
+        print("Clusterizando...")
         centroids, clusters = self.clusterizer.fit(embeddings)
         
         # 2. Save Index (Binary)
-        print("Saving binary index...")
+        print("Salvando índice binário...")
         
-        # Re-organize metadata to match the sorted order in storage
         ordered_metadata = {}
         current_idx = 0
         
@@ -60,11 +87,11 @@ class NanoRAG:
         self.storage.save(dim, centroids, clusters)
 
         # 3. Save Metadata
-        print("Saving metadata...")
+        print("Salvando metadados...")
         with open(self.metadata_path, "w", encoding="utf-8") as f:
             json.dump(ordered_metadata, f, ensure_ascii=False, indent=2)
             
-        print("Indexing complete.")
+        print("Indexação concluída.")
 
     def query(self, query_vector, top_k=3):
         """

@@ -22,29 +22,34 @@ pip install nano-rag
 
 ### 1. Inserção de Dados (Indexação)
 
-Você precisa fornecer uma lista de documentos, onde cada documento é um dicionário contendo o vetor (`embedding`), o conteúdo textual (`content`) e metadados opcionais (`metadata`).
+Você tem duas formas profissionais de indexar seus dados:
+
+#### Opção A: Método Facilitador (`fit`)
+Ideal quando você tem listas separadas de vetores e textos.
 
 ```python
 from nano_rag import NanoRAG
 
-# Exemplo de dados (normalmente viriam de uma API de embeddings)
+embeddings = [[0.1, 0.2, ...], [0.3, 0.4, ...]]
+contents = ["Texto do chunk 1", "Texto do chunk 2"]
+metadatas = [{"source": "doc1.pdf"}, {"source": "doc2.pdf"}] # Opcional
+
+rag = NanoRAG()
+rag.fit(embeddings, contents, metadatas)
+```
+
+#### Opção B: Método de Documentos (`insert`)
+Ideal quando você já tem os objetos estruturados.
+
+```python
 documents = [
     {
         "content": "O céu é azul.",
-        "embedding": [0.1, 0.2, 0.8, ...], # Vetor de floats
-        "metadata": {"source": "livro_natureza.txt"}
-    },
-    {
-        "content": "A grama é verde.",
-        "embedding": [0.2, 0.9, 0.1, ...],
-        "metadata": {"source": "livro_natureza.txt"}
+        "embedding": [0.1, 0.2, ...],
+        "metadata": {"source": "natureza"}
     }
-    # ...
 ]
 
-rag = NanoRAG(index_path="meu_index.vlog", metadata_path="meu_metadata.json")
-
-# Processa, clusteriza e salva no disco
 rag.insert(documents)
 ```
 
