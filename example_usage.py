@@ -1,67 +1,95 @@
 import os
 import random
-from nano_rag import NanoRAG
+from nano_rag import NanoDocumentRAG
 
-# --- SIMULAÇÃO: PROCESSO OFFLINE (Indexação de Documentos) ---
-def offline_indexing_example():
-    print("--- [OFFLINE] Indexando Documentos Individuais ---")
+# --- CONFIGURAÇÕES DO EXEMPLO ---
+STORAGE_DIR = "./meu_storage"
+DOC_ID = "manual_tecnico_v1"
+
+# --- SIMULAÇÃO: PROCESSO OFFLINE (Geração do Índice) ---
+def exemplo_indexacao_offline():
+    """
+    Simula o momento em que você processa seus documentos localmente
+    ou em um job de CI/CD para gerar os arquivos .vlog e .json.
+    """
+    print("\n🚀 [OFFLINE] Iniciando Indexação do Documento...")
     
-    # 1. Dados do Documento A
-    doc_a_id = "manual_tecnico"
-    chunks_a = [
-        "O NanoRAG é focado em eficiência para AWS Lambda.",
-        "A busca vetorial utiliza K-Means para agrupar vetores.",
-        "O armazenamento binário .vlog permite leitura parcial."
+    # 1. Seus dados (Textos e Metadados)
+    chunks = [
+        "O NanoDocumentRAG é focado em eficiência para AWS Lambda.",
+        "A busca vetorial utiliza K-Means para agrupar vetores e acelerar a busca.",
+        "O armazenamento binário .vlog permite leitura parcial (Range Requests).",
+        "A expansão de contexto dinâmica ajuda o LLM a entender melhor o assunto.",
+        "O céu é azul e a grama é verde em dias de sol intenso."
     ]
-    # Simulação de embeddings (dimensão 3)
-    embeddings_a = [[random.uniform(-1, 1) for _ in range(3)] for _ in chunks_a]
+    
+    # 2. Simulação de Embeddings (Vetor de dimensão 3 para o exemplo)
+    # Na vida real: embeddings = openai_client.embeddings.create(input=chunks, ...)
+    dim = 3
+    embeddings = [[random.uniform(-1, 1) for _ in range(dim)] for _ in chunks]
 
-    # 2. Dados do Documento B
-    doc_b_id = "contrato_venda"
-    chunks_b = [
-        "Este contrato rege a venda de serviços de software.",
-        "O prazo de entrega é de 30 dias úteis.",
-        "A multa por rescisão antecipada é de 10%."
-    ]
-    embeddings_b = [[random.uniform(-1, 1) for _ in range(3)] for _ in chunks_b]
-
-    # 3. Criando os índices (em uma pasta específica)
-    storage = "./meu_storage"
+    # 3. Criando o índice físico (Gera os arquivos .vlog e .json)
+    rag = NanoDocumentRAG(document_id=DOC_ID, storage_dir=STORAGE_DIR)
+    rag.index(embeddings, chunks)
     
-    # Indexando Documento A
-    rag_a = NanoRAG(document_id=doc_a_id, storage_dir=storage)
-    rag_a.index(embeddings_a, chunks_a)
-    
-    # Indexando Documento B
-    rag_b = NanoRAG(document_id=doc_b_id, storage_dir=storage)
-    rag_b.index(embeddings_b, chunks_b)
-    
-    print(f"--- [OFFLINE] Índices criados em: {storage} ---\n")
+    print(f"✅ [OFFLINE] Índice criado com sucesso em: {STORAGE_DIR}")
 
 
-# --- SIMULAÇÃO: PROCESSO ONLINE (Busca Direcionada) ---
-def online_search_example():
-    print("--- [ONLINE] Buscando em um Documento Específico ---")
+# --- SIMULAÇÃO: PROCESSO ONLINE (Busca no AWS Lambda) ---
+def exemplo_busca_online_local():
+    """
+    Simula o uso da biblioteca dentro de uma AWS Lambda usando 
+    armazenamento local (ex: EFS montado ou arquivos no /tmp).
+    """
+    print("\n🔍 [ONLINE - LOCAL] Buscando com Expansão de Contexto...")
     
-    storage = "./meu_storage"
+    # Inicializa o motor apontando para a pasta onde os índices estão
+    rag = NanoDocumentRAG(document_id=DOC_ID, storage_dir=STORAGE_DIR)
     
-    # O usuário quer buscar apenas no 'manual_tecnico'
-    doc_id = "manual_tecnico"
-    rag = NanoRAG(document_id=doc_id, storage_dir=storage)
-    
-    # Vetor da query (dimensão 3)
+    # Vetor da query (gerado pelo mesmo modelo da indexação)
     query_vector = [random.uniform(-1, 1) for _ in range(3)]
     
-    # Busca
-    results = rag.search(query_vector, top_k=2)
+    # Busca com 50 caracteres de margem (pega trechos dos vizinhos)
+    results = rag.search(query_vector, top_k=1, margin_chars=50)
     
-    print(f"Resultados encontrados no documento '{doc_id}':")
     for res in results:
-        print(f"  Score: {res['score']:.4f} | Texto: {res['content']}")
+        print(f"🎯 Match (Score: {res['score']:.4f})")
+        print(f"📝 Conteúdo Expandido: \"{res['content']}\"")
+
+
+def exemplo_busca_online_s3():
+    """
+    Simula o uso da biblioteca dentro de uma AWS Lambda buscando
+    diretamente do Amazon S3 sem baixar o arquivo inteiro (Range Requests).
+    """
+    print("\n☁️ [ONLINE - S3] Buscando diretamente do S3 (Simulação)...")
     
-    print("\n--- [ONLINE] Busca Finalizada ---")
+    # 1. Em uma Lambda real, você faria: 
+    # import boto3
+    # s3 = boto3.client('s3')
+    
+    # Para este exemplo, vamos apenas mostrar como seria a chamada:
+    print("💡 Para usar S3, você passaria o s3_client injetado:")
+    
+    # rag = NanoDocumentRAG(
+    #     document_id=DOC_ID,
+    #     storage_dir="indices_no_s3", 
+    #     s3_client=s3,               # Injeção do cliente boto3
+    #     s3_bucket="meu-bucket-rag"   # Nome do seu bucket
+    # )
+    
+    print("   rag = NanoDocumentRAG(document_id=DOC_ID, s3_client=s3, s3_bucket='...')")
+    print("   # A lib buscará apenas os bytes necessários via rede!")
 
 
 if __name__ == "__main__":
-    offline_indexing_example()
-    online_search_example()
+    # 1. Primeiro geramos os arquivos localmente
+    exemplo_indexacao_offline()
+    
+    # 2. Depois testamos a busca local (como se fosse um EFS ou /tmp)
+    exemplo_busca_online_local()
+    
+    # 3. Demonstração conceitual do S3
+    exemplo_busca_online_s3()
+    
+    print("\n✨ Exemplo finalizado!")

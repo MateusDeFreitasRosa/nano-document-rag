@@ -1,66 +1,85 @@
-# NanoRAG
+# 🚀 NanoDocumentRAG
 
-Uma biblioteca Python lightweight para RAG (Retrieval-Augmented Generation) otimizada para ambientes Serverless (AWS Lambda). A lib foca em busca vetorial eficiente ($O(\log N)$) dentro de **documentos individuais** utilizando Clustering (K-Means) e armazenamento binário, sem dependências pesadas.
+Uma biblioteca Python **ultra-lightweight** para RAG (Retrieval-Augmented Generation) focada em documentos individuais e otimizada para ambientes **Serverless (AWS Lambda)**.
 
-**Nota:** Esta biblioteca não gera embeddings. Você deve fornecer os vetores já gerados (ex: via OpenAI, Cohere, HuggingFace).
+O **NanoDocumentRAG** utiliza uma estratégia de busca por centróides ($O(\log N)$) e armazenamento binário customizado (`.vlog`) para garantir performance máxima com consumo mínimo de memória.
 
-## Características
+---
 
-*   **Zero Heavy Libs:** Apenas Python standard library (`math`, `struct`, `json`, `random`).
-*   **Foco em Documentos:** Cada documento possui seu próprio índice físico isolado.
-*   **Serverless Friendly:** Otimizada para baixo consumo de memória e inicialização rápida.
-*   **Busca em 2 Etapas:** Usa centróides para filtrar o espaço de busca dentro do documento.
+## 💡 Por que usar o NanoDocumentRAG?
 
-## Instalação
+*   **Zero Heavy Libs:** Sem NumPy, Pandas ou FAISS. Apenas Python standard library.
+*   **Foco em Documentos:** Cada documento gera seu próprio índice físico isolado.
+*   **Serverless Friendly:** Cold start zero e baixíssimo uso de RAM.
+*   **Contextual Expansion:** Expansão dinâmica de contexto (janela de vizinhos) na hora da busca.
+*   **Cálculo Automático:** Otimização automática de clusters ($K = \sqrt{N}$).
+
+---
+
+## 📦 Instalação
 
 ```bash
-pip install nano-rag
+pip install git+https://github.com/MateusDeFreitasRosa/nano-rag.git
 ```
 
-## Como Usar
+---
 
-### 1. Indexação de um Documento
+## 🛠️ Como Usar
 
-Você deve fornecer os vetores (embeddings) e os textos (chunks) de um documento específico.
+### 1. Indexação (Processo Offline)
+Nesta etapa, você gera o índice vetorial para um documento específico. Você deve fornecer os embeddings e os textos já processados.
 
 ```python
-from nano_rag import NanoRAG
+from nano_rag import NanoDocumentRAG
 
-# Dados do documento
+# Configurações
 doc_id = "manual_tecnico_v1"
+storage = "./meu_storage"
+
+# Dados (Ex: vindos de uma API de Embedding)
 embeddings = [[0.1, 0.2, ...], [0.3, 0.4, ...]]
-contents = ["Texto do chunk 1", "Texto do chunk 2"]
+chunks = ["O NanoDocumentRAG é eficiente.", "Ideal para AWS Lambda."]
 metadatas = [{"page": 1}, {"page": 2}] # Opcional
 
-# Inicializa o motor para este documento
-rag = NanoRAG(document_id=doc_id, storage_dir="./indices")
-
-# Gera o índice (cria ./indices/manual_tecnico_v1.vlog e .json)
-rag.index(embeddings, contents, metadatas)
+# Inicializa e indexa
+rag = NanoDocumentRAG(document_id=doc_id, storage_dir=storage)
+rag.index(embeddings, chunks, metadatas)
+# Isso gera: ./meu_storage/manual_tecnico_v1.vlog e .json
 ```
 
-### 2. Busca em um Documento (Search)
-
-Para buscar, você deve carregar o motor com o `document_id` correspondente.
+### 2. Busca com Expansão de Contexto (Processo Online)
+Na hora de buscar, você pode definir uma margem de caracteres para incluir o contexto dos chunks vizinhos.
 
 ```python
-# Carrega o motor para o documento desejado
-rag = NanoRAG(document_id="manual_tecnico_v1", storage_dir="./indices")
+from nano_rag import NanoDocumentRAG
 
-# Vetor da query (gerado pelo mesmo modelo usado na indexação)
-query_vector = [0.15, 0.25, 0.75, ...] 
+# Carrega o motor para o documento
+rag = NanoDocumentRAG(document_id="manual_tecnico_v1", storage_dir="./meu_storage")
 
-# Busca os trechos mais similares dentro deste documento
-results = rag.search(query_vector, top_k=3)
+# Vetor da query (gerado pelo mesmo modelo da indexação)
+query_vector = [0.15, 0.25, ...]
+
+# Busca com expansão de 200 caracteres para cada lado (vizinhos)
+results = rag.search(query_vector, top_k=3, margin_chars=200)
 
 for res in results:
     print(f"Score: {res['score']:.4f}")
-    print(f"Conteúdo: {res['content']}")
+    print(f"Conteúdo (Expandido): {res['content']}")
     print(f"Metadata: {res['metadata']}")
     print("-" * 20)
 ```
 
-## Estrutura de Arquivos
+---
 
-*   `{document_id}.vlog`: Arquivo binário contendo os vetores e centróides do documento.
-*   `{document_id}.json`: Arquivo JSON mapeando os vetores para o conteúdo textual.
+## 📂 Estrutura de Armazenamento
+
+Para cada documento indexado, o NanoDocumentRAG cria dois arquivos:
+
+1.  **`{document_id}.vlog`**: Arquivo binário (`float32`) contendo os vetores e centróides. Otimizado para leitura parcial via *disk seek*.
+2.  **`{document_id}.json`**: Arquivo de metadados contendo os textos originais e informações extras.
+
+---
+
+## ⚙️ Requisitos
+*   Python 3.7+
+*   Zero dependências externas.

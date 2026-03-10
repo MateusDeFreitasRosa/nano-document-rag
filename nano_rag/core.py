@@ -4,32 +4,54 @@ from .math_ops import cosine_similarity
 from .clusterizer import Clusterizer
 from .storage import Storage
 
-class NanoRAG:
-    def __init__(self, document_id, storage_dir=".", n_clusters=None):
+class NanoDocumentRAG:
+    def __init__(self, document_id, storage_dir=".", n_clusters=None, s3_client=None, s3_bucket=None):
         """
-        Inicializa o NanoRAG para um documento específico.
+        Inicializa o NanoDocumentRAG para um documento específico.
         
         Args:
             document_id: Identificador único do documento (ex: 'manual_tecnico').
-                         Isso gerará '{document_id}.vlog' e '{document_id}.json'.
-            storage_dir: Diretório onde os arquivos de índice serão armazenados.
-            n_clusters: Quantidade de clusters (K). Se None, será calculado automaticamente como sqrt(N).
+            storage_dir: Diretório local ou prefixo no S3.
+            n_clusters: Quantidade de clusters (K).
+            s3_client: Objeto boto3.client('s3') injetado (opcional).
+            s3_bucket: Nome do bucket no S3 (necessário se s3_client for usado).
         """
         self.document_id = document_id
         self.storage_dir = storage_dir
         self.n_clusters = n_clusters
+        self.s3_client = s3_client
+        self.s3_bucket = s3_bucket
         
-        if storage_dir != "." and not os.path.exists(storage_dir):
-            os.makedirs(storage_dir)
-
-        self.index_path = os.path.join(storage_dir, f"{document_id}.vlog")
-        self.metadata_path = os.path.join(storage_dir, f"{document_id}.json")
+        # Caminhos físicos
+        if s3_client and s3_bucket:
+            # No S3, usamos caminhos com /
+            self.index_path = f"{storage_dir}/{document_id}.vlog".lstrip("./")
+            self.metadata_path = f"{storage_dir}/{document_id}.json".lstrip("./")
+        else:
+            # Localmente, usamos os caminhos do SO
+            if storage_dir != "." and not os.path.exists(storage_dir):
+                os.makedirs(storage_dir)
+            self.index_path = os.path.join(storage_dir, f"{document_id}.vlog")
+            self.metadata_path = os.path.join(storage_dir, f"{document_id}.json")
         
-        self.storage = Storage(self.index_path)
-        # O K será definido dinamicamente no momento da indexação se n_clusters for None
+        self.storage = Storage(self.index_path, s3_client=s3_client, s3_bucket=s3_bucket)
         initial_k = n_clusters if n_clusters is not None else 1
         self.clusterizer = Clusterizer(k=initial_k)
         self.metadata = {}
+
+    def _load_metadata(self):
+        """Carrega os metadados do disco local ou do S3."""
+        if self.s3_client and self.s3_bucket:
+            response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=self.metadata_path)
+            data = json.loads(response['Body'].read().decode('utf-8'))
+        else:
+            if not os.path.exists(self.metadata_path):
+                return False
+            with open(self.metadata_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        
+        self.metadata = {int(k): v for k, v in data.items()}
+        return True
 
     def index(self, embeddings, contents, metadatas=None):
         """
@@ -112,11 +134,6 @@ class NanoRAG:
     def search(self, query_vector, top_k=3, margin_chars=0):
         """
         Busca os trechos mais similares dentro deste documento.
-        
-        Args:
-            query_vector: Vetor da query (List[float]).
-            top_k: Número de resultados.
-            margin_chars: Quantidade de caracteres para expandir (vizinhos).
         """
         # 1. Load Centroids
         centroids = self.storage.load_centroids()
@@ -126,8 +143,6 @@ class NanoRAG:
         # 2. Find Best Cluster
         best_cluster_id = -1
         max_sim = -1.0
-        
-        # Using Cosine Similarity for query vs centroids
         for i, centroid in enumerate(centroids):
             sim = cosine_similarity(query_vector, centroid)
             if sim > max_sim:
@@ -137,54 +152,36 @@ class NanoRAG:
         if best_cluster_id == -1:
             return []
 
-        # 3. Load Vectors for that Cluster
-        # We need the cluster index first
-        cluster_index = self.storage.load_cluster_index() # List of (offset, count)
+        # 3. Load Cluster Vectors
+        cluster_index = self.storage.load_cluster_index()
         dim = len(query_vector)
-        
         cluster_vectors = self.storage.load_cluster_vectors(best_cluster_id, cluster_index[best_cluster_id], dim)
         
-        # 4. Find Best Vectors in Cluster
+        # 4. Search in Cluster
         results = []
         for i, vec in enumerate(cluster_vectors):
             score = cosine_similarity(query_vector, vec)
-            results.append((score, i)) # i is the index WITHIN the cluster
+            results.append((score, i))
         
         results.sort(key=lambda x: x[0], reverse=True)
         top_results = results[:top_k]
         
         # 5. Retrieve Metadata
-        # We need to map the cluster-local index back to the global storage index
-        # The global index is: sum(counts of previous clusters) + local_index
-        
-        global_offset = 0
-        for i in range(best_cluster_id):
-            global_offset += cluster_index[i][1] # count
+        global_offset = sum(cluster_index[i][1] for i in range(best_cluster_id))
             
-        final_output = []
-        
-        # Load metadata if not loaded
         if not self.metadata:
-            if os.path.exists(self.metadata_path):
-                with open(self.metadata_path, "r", encoding="utf-8") as f:
-                    # JSON keys are strings, convert to int
-                    data = json.load(f)
-                    self.metadata = {int(k): v for k, v in data.items()}
-            else:
+            if not self._load_metadata():
                 return []
 
+        final_output = []
         for score, local_idx in top_results:
             global_idx = global_offset + local_idx
             meta = self.metadata.get(global_idx)
-            
             if meta:
                 content = meta["content"]
-                
-                # Expansão Dinâmica de Contexto (Vizinhos)
                 if margin_chars > 0:
                     prev_meta = self.metadata.get(global_idx - 1)
                     next_meta = self.metadata.get(global_idx + 1)
-                    
                     prefix = prev_meta["content"][-margin_chars:] if prev_meta else ""
                     suffix = next_meta["content"][:margin_chars] if next_meta else ""
                     content = f"{prefix}{content}{suffix}"
@@ -195,5 +192,4 @@ class NanoRAG:
                     "metadata": meta["metadata"],
                     "cluster_id": meta["cluster_id"]
                 })
-                
         return final_output
