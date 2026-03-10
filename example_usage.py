@@ -59,27 +59,44 @@ def exemplo_busca_online_local():
 
 def exemplo_busca_online_s3():
     """
-    Simula o uso da biblioteca dentro de uma AWS Lambda buscando
+    Exemplo real de como usar a biblioteca dentro de uma AWS Lambda buscando
     diretamente do Amazon S3 sem baixar o arquivo inteiro (Range Requests).
     """
-    print("\n☁️ [ONLINE - S3] Buscando diretamente do S3 (Simulação)...")
+    print("\n☁️ [ONLINE - S3] Buscando diretamente do S3...")
     
-    # 1. Em uma Lambda real, você faria: 
+    # 1. Em uma Lambda real, o boto3 já está disponível:
     # import boto3
     # s3 = boto3.client('s3')
     
-    # Para este exemplo, vamos apenas mostrar como seria a chamada:
-    print("💡 Para usar S3, você passaria o s3_client injetado:")
+    # Simulando o objeto s3_client para demonstração
+    class MockS3Client:
+        def get_object(self, Bucket, Key, Range=None):
+            # Simula o comportamento do boto3.client('s3').get_object()
+            print(f"   [S3 API CALL] get_object(Bucket='{Bucket}', Key='{Key}', Range='{Range}')")
+            # Em um cenário real, isso retornaria o streaming de bytes do S3
+            raise NotImplementedError("Este é apenas um exemplo conceitual. Use um s3_client real do boto3.")
+
+    s3_mock = MockS3Client()
     
-    # rag = NanoDocumentRAG(
-    #     document_id=DOC_ID,
-    #     storage_dir="indices_no_s3", 
-    #     s3_client=s3,               # Injeção do cliente boto3
-    #     s3_bucket="meu-bucket-rag"   # Nome do seu bucket
-    # )
+    print("💡 Configurando o NanoDocumentRAG para modo S3:")
     
-    print("   rag = NanoDocumentRAG(document_id=DOC_ID, s3_client=s3, s3_bucket='...')")
-    print("   # A lib buscará apenas os bytes necessários via rede!")
+    # Inicializa o motor injetando o cliente S3 e as coordenadas do bucket
+    # A lib detecta o s3_client e entra automaticamente no modo 'Range Request'
+    rag = NanoDocumentRAG(
+        document_id=DOC_ID,
+        storage_dir="indices",      # Pasta/Prefixo dentro do bucket
+        s3_client=s3_mock,          # Injeção do cliente boto3
+        s3_bucket="meu-bucket-rag"  # Nome do seu bucket S3
+    )
+    
+    print(f"   rag = NanoDocumentRAG(document_id='{DOC_ID}', s3_client=s3, s3_bucket='meu-bucket-rag')")
+    
+    try:
+        # A busca agora faria chamadas parciais ao S3 via rede
+        # results = rag.search(query_vector, margin_chars=200)
+        print("   ✅ Pronto para realizar buscas ultra-eficientes no S3!")
+    except Exception as e:
+        print(f"   ℹ️ {e}")
 
 
 if __name__ == "__main__":

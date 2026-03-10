@@ -5,6 +5,10 @@ setup(
     version="0.1.0",
     packages=find_packages(),
     install_requires=[], 
+    extras_require={
+        "aws": ["boto3"],
+        "all": ["boto3"]
+    },
     author="Mateus de Freitas Rosa",
     description="Uma biblioteca ultra-lightweight para RAG focada em documentos e otimizada para AWS Lambda",
     long_description=open("README.md", encoding="utf-8").read(),

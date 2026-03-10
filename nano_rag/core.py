@@ -129,6 +129,26 @@ class NanoDocumentRAG:
         with open(self.metadata_path, "w", encoding="utf-8") as f:
             json.dump(ordered_metadata, f, ensure_ascii=False, indent=2)
             
+        # 4. Upload Automático para S3 (Se configurado)
+        if self.s3_bucket:
+            try:
+                import boto3
+                s3 = self.s3_client or boto3.client('s3')
+                print(f"📤 Fazendo upload automático para S3: s3://{self.s3_bucket}/{self.index_path}")
+                
+                # Normaliza caminhos para o S3 (sempre usa /)
+                s3_index_key = self.index_path.replace("\\", "/")
+                s3_meta_key = self.metadata_path.replace("\\", "/")
+                
+                s3.upload_file(self.index_path, self.s3_bucket, s3_index_key)
+                s3.upload_file(self.metadata_path, self.s3_bucket, s3_meta_key)
+                print("✅ Upload para S3 concluído com sucesso!")
+            except ImportError:
+                print("⚠️ Aviso: 'boto3' não encontrado. O índice foi salvo localmente, mas não pôde ser enviado ao S3.")
+                print("   Instale com: pip install 'nano-document-rag[aws]'")
+            except Exception as e:
+                print(f"❌ Erro ao fazer upload para o S3: {str(e)}")
+
         print(f"Indexação do documento '{self.document_id}' concluída.")
 
     def search(self, query_vector, top_k=3, margin_chars=0):
