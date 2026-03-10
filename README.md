@@ -21,10 +21,10 @@ O objetivo do **NanoDocumentRAG** é oferecer um motor de busca vetorial que nã
 
 ```bash
 # Apenas o Core (Local/EFS)
-pip install git+https://github.com/MateusDeFreitasRosa/nano-rag.git
+pip install git+https://github.com/MateusDeFreitasRosa/nano-document-rag.git
 
 # Com suporte a S3 (AWS)
-pip install "nano-document-rag[aws] @ git+https://github.com/MateusDeFreitasRosa/nano-rag.git"
+pip install "nano-document-rag[aws] @ git+https://github.com/MateusDeFreitasRosa/nano-document-rag.git"
 ```
 
 ---
