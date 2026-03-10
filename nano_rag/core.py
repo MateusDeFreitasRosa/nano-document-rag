@@ -1,215 +1,206 @@
 import os
 import json
+import math
 from .math_ops import cosine_similarity
 from .clusterizer import Clusterizer
 from .storage import Storage
 
 class NanoDocumentRAG:
-    def __init__(self, document_id, storage_dir=".", n_clusters=None, s3_client=None, s3_bucket=None):
+    def __init__(self, storage_dir=".", s3_client=None, s3_bucket=None):
         """
-        Inicializa o NanoDocumentRAG para um documento específico.
+        Gerenciador de documentos vetoriais NanoDocumentRAG.
         
         Args:
-            document_id: Identificador único do documento (ex: 'manual_tecnico').
-            storage_dir: Diretório local ou prefixo no S3.
-            n_clusters: Quantidade de clusters (K).
-            s3_client: Objeto boto3.client('s3') injetado (opcional).
-            s3_bucket: Nome do bucket no S3 (necessário se s3_client for usado).
+            storage_dir: Pasta local ou prefixo no S3 para armazenar os índices.
+            s3_client: Cliente boto3 (opcional).
+            s3_bucket: Nome do bucket no S3 (opcional).
         """
-        self.document_id = document_id
         self.storage_dir = storage_dir
-        self.n_clusters = n_clusters
         self.s3_client = s3_client
         self.s3_bucket = s3_bucket
         
-        # Caminhos físicos
-        if s3_client and s3_bucket:
-            # No S3, usamos caminhos com /
-            self.index_path = f"{storage_dir}/{document_id}.vlog".lstrip("./")
-            self.metadata_path = f"{storage_dir}/{document_id}.json".lstrip("./")
-        else:
-            # Localmente, usamos os caminhos do SO
-            if storage_dir != "." and not os.path.exists(storage_dir):
-                os.makedirs(storage_dir)
-            self.index_path = os.path.join(storage_dir, f"{document_id}.vlog")
-            self.metadata_path = os.path.join(storage_dir, f"{document_id}.json")
-        
-        self.storage = Storage(self.index_path, s3_client=s3_client, s3_bucket=s3_bucket)
-        initial_k = n_clusters if n_clusters is not None else 1
-        self.clusterizer = Clusterizer(k=initial_k)
-        self.metadata = {}
+        # Se for local, garante que a pasta existe
+        if not s3_client and storage_dir != "." and not os.path.exists(storage_dir):
+            os.makedirs(storage_dir)
 
-    def _load_metadata(self):
-        """Carrega os metadados do disco local ou do S3."""
+    def _get_paths(self, document_id):
+        """Gera os caminhos físicos (locais ou S3) para um documento."""
         if self.s3_client and self.s3_bucket:
-            response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=self.metadata_path)
-            data = json.loads(response['Body'].read().decode('utf-8'))
+            # No S3, usamos caminhos com / e sem o ./ inicial
+            vlog = f"{self.storage_dir}/{document_id}.vlog".lstrip("./").replace("\\", "/")
+            meta = f"{self.storage_dir}/{document_id}.json".lstrip("./").replace("\\", "/")
+            return vlog, meta
         else:
-            if not os.path.exists(self.metadata_path):
-                return False
-            with open(self.metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        
-        self.metadata = {int(k): v for k, v in data.items()}
-        return True
+            vlog = os.path.join(self.storage_dir, f"{document_id}.vlog")
+            meta = os.path.join(self.storage_dir, f"{document_id}.json")
+            return vlog, meta
 
-    def index(self, embeddings, contents, metadatas=None):
+    def create_or_replace_document(self, document_id, embeddings, contents, metadatas=None, n_clusters=None):
         """
-        Gera o índice vetorial para este documento com cálculo automático de clusters.
-        
-        Args:
-            embeddings: Lista de vetores (List[List[float]]) usados para a busca.
-            contents: Lista de strings (List[str]) que representam o chunk.
-            metadatas: Lista opcional de dicionários de metadados (List[dict]).
+        Cria um novo índice para o documento ou sobrescreve o existente.
         """
-        if not embeddings:
-            return
+        self._build_and_save(document_id, embeddings, contents, metadatas, n_clusters)
 
-        # Cálculo automático do número de clusters (K)
-        # Heurística: K = sqrt(N), onde N é o número de chunks
-        if self.n_clusters is None:
-            import math
-            n_samples = len(embeddings)
-            # Garante pelo menos 1 cluster e no máximo o número de amostras
-            k_auto = int(math.sqrt(n_samples))
-            self.clusterizer.k = max(1, k_auto)
-        else:
-            self.clusterizer.k = self.n_clusters
-
-        if len(embeddings) != len(contents):
-            raise ValueError("As listas de embeddings e contents devem ter o mesmo tamanho.")
+    def add_to_document(self, document_id, embeddings, contents, metadatas=None, n_clusters=None):
+        """
+        Adiciona novos vetores a um documento existente (Append com re-indexação).
+        """
+        vlog_path, meta_path = self._get_paths(document_id)
         
-        if metadatas and len(metadatas) != len(embeddings):
-            raise ValueError("A lista de metadatas deve ter o mesmo tamanho das outras, se fornecida.")
-
-        documents = []
-        for i in range(len(embeddings)):
-            doc = {
-                "embedding": embeddings[i],
-                "content": contents[i],
-                "metadata": metadatas[i] if metadatas else {}
-            }
-            documents.append(doc)
+        existing_embeddings = []
+        existing_contents = []
+        existing_metadatas = []
         
-        self._build_index(embeddings, documents)
+        # Tenta carregar dados existentes para fazer o merge
+        try:
+            # Precisamos baixar temporariamente para ler se estiver no S3
+            temp_vlog = vlog_path
+            temp_meta = meta_path
+            
+            if self.s3_client:
+                temp_vlog = f"temp_{document_id}.vlog"
+                temp_meta = f"temp_{document_id}.json"
+                self.s3_client.download_file(self.s3_bucket, vlog_path, temp_vlog)
+                self.s3_client.download_file(self.s3_bucket, meta_path, temp_meta)
 
-    def _build_index(self, embeddings, documents):
-        """Método interno para construir e salvar o índice do documento."""
-        if not embeddings:
-            return
+            # Carrega metadados
+            with open(temp_meta, "r", encoding="utf-8") as f:
+                old_meta_dict = json.load(f)
+            
+            # Carrega vetores usando o Storage
+            storage = Storage(temp_vlog)
+            dim, _, _ = storage.load_header()
+            cluster_idx = storage.load_cluster_index()
+            
+            for i in range(len(cluster_idx)):
+                vecs = storage.load_cluster_vectors(i, cluster_idx[i], dim)
+                existing_embeddings.extend(vecs)
+            
+            # Ordena metadados antigos para extrair conteúdo e metadados originais
+            for i in range(len(old_meta_dict)):
+                item = old_meta_dict[str(i)]
+                existing_contents.append(item["content"])
+                existing_metadatas.append(item["metadata"])
+                
+            # Limpa arquivos temporários se necessário
+            if self.s3_client:
+                os.remove(temp_vlog)
+                os.remove(temp_meta)
+                
+        except Exception as e:
+            print(f"ℹ️ Documento '{document_id}' não encontrado ou erro ao carregar. Iniciando novo: {e}")
 
-        dim = len(embeddings[0])
-        print(f"Documento: {self.document_id} | Dimensão: {dim}")
+        # Merge dos dados novos com os antigos
+        all_embeddings = existing_embeddings + embeddings
+        all_contents = existing_contents + contents
+        all_metadatas = existing_metadatas + (metadatas if metadatas else [{}] * len(contents))
+        
+        self._build_and_save(document_id, all_embeddings, all_contents, all_metadatas, n_clusters)
 
-        # 1. Cluster
-        print(f"Clusterizando {len(embeddings)} vetores...")
-        centroids, clusters = self.clusterizer.fit(embeddings)
+    def _build_and_save(self, document_id, embeddings, contents, metadatas, n_clusters):
+        """Lógica central de clusterização e persistência."""
+        vlog_path, meta_path = self._get_paths(document_id)
         
-        # 2. Save Index (Binary)
-        print("Salvando índice binário (.vlog)...")
+        # 1. Cálculo de Clusters
+        n_samples = len(embeddings)
+        k = n_clusters if n_clusters else max(1, int(math.sqrt(n_samples)))
+        clusterizer = Clusterizer(k=k)
+        centroids, clusters = clusterizer.fit(embeddings)
         
-        ordered_metadata = {}
-        current_idx = 0
-        
+        # 2. Preparação de Metadados Ordenados por Cluster
+        ordered_meta = {}
+        curr = 0
         for i in range(len(centroids)):
-            cluster_vectors = clusters.get(i, [])
-            for original_idx, _ in cluster_vectors:
-                doc = documents[original_idx]
-                ordered_metadata[current_idx] = {
-                    "content": doc.get("content", ""),
-                    "metadata": doc.get("metadata", {}),
+            for orig_idx, _ in clusters.get(i, []):
+                ordered_meta[curr] = {
+                    "content": contents[orig_idx],
+                    "metadata": metadatas[orig_idx] if metadatas else {},
                     "cluster_id": i
                 }
-                current_idx += 1
+                curr += 1
+        
+        # 3. Salvamento (Sempre gera local primeiro)
+        # Se for S3, usamos arquivos temporários para o upload
+        local_vlog = vlog_path
+        local_meta = meta_path
+        if self.s3_client:
+            local_vlog = f"upload_{document_id}.vlog"
+            local_meta = f"upload_{document_id}.json"
 
-        self.storage.save(dim, centroids, clusters)
-
-        # 3. Save Metadata
-        print("Salvando metadados (.json)...")
-        with open(self.metadata_path, "w", encoding="utf-8") as f:
-            json.dump(ordered_metadata, f, ensure_ascii=False, indent=2)
+        storage = Storage(local_vlog)
+        storage.save(len(embeddings[0]), centroids, clusters)
+        with open(local_meta, "w", encoding="utf-8") as f:
+            json.dump(ordered_meta, f, ensure_ascii=False, indent=2)
             
-        # 4. Upload Automático para S3 (Se configurado)
-        if self.s3_bucket:
-            try:
-                import boto3
-                s3 = self.s3_client or boto3.client('s3')
-                print(f"📤 Fazendo upload automático para S3: s3://{self.s3_bucket}/{self.index_path}")
-                
-                # Normaliza caminhos para o S3 (sempre usa /)
-                s3_index_key = self.index_path.replace("\\", "/")
-                s3_meta_key = self.metadata_path.replace("\\", "/")
-                
-                s3.upload_file(self.index_path, self.s3_bucket, s3_index_key)
-                s3.upload_file(self.metadata_path, self.s3_bucket, s3_meta_key)
-                print("✅ Upload para S3 concluído com sucesso!")
-            except ImportError:
-                print("⚠️ Aviso: 'boto3' não encontrado. O índice foi salvo localmente, mas não pôde ser enviado ao S3.")
-                print("   Instale com: pip install 'nano-document-rag[aws]'")
-            except Exception as e:
-                print(f"❌ Erro ao fazer upload para o S3: {str(e)}")
+        # 4. Sincronização com S3
+        if self.s3_client and self.s3_bucket:
+            self.s3_client.upload_file(local_vlog, self.s3_bucket, vlog_path)
+            self.s3_client.upload_file(local_meta, self.s3_bucket, meta_path)
+            os.remove(local_vlog)
+            os.remove(local_meta)
+            print(f"✅ Documento '{document_id}' sincronizado com S3.")
+        else:
+            print(f"✅ Documento '{document_id}' salvo localmente.")
 
-        print(f"Indexação do documento '{self.document_id}' concluída.")
-
-    def search(self, query_vector, top_k=3, margin_chars=0):
+    def search(self, document_id, query_vector, top_k=3, margin_chars=0):
         """
-        Busca os trechos mais similares dentro deste documento.
+        Busca os trechos mais similares dentro de um documento específico.
         """
-        # 1. Load Centroids
-        centroids = self.storage.load_centroids()
-        if not centroids:
-            return []
-
-        # 2. Find Best Cluster
-        best_cluster_id = -1
+        vlog_path, meta_path = self._get_paths(document_id)
+        
+        # Inicializa Storage (Modo Local ou S3 Range Request)
+        storage = Storage(vlog_path, s3_client=self.s3_client, s3_bucket=self.s3_bucket)
+        
+        # 1. Busca Centróide
+        centroids = storage.load_centroids()
+        if not centroids: return []
+        
+        best_id = -1
         max_sim = -1.0
-        for i, centroid in enumerate(centroids):
-            sim = cosine_similarity(query_vector, centroid)
+        for i, c in enumerate(centroids):
+            sim = cosine_similarity(query_vector, c)
             if sim > max_sim:
                 max_sim = sim
-                best_cluster_id = i
+                best_id = i
         
-        if best_cluster_id == -1:
-            return []
-
-        # 3. Load Cluster Vectors
-        cluster_index = self.storage.load_cluster_index()
+        if best_id == -1: return []
+        
+        # 2. Busca no Cluster
+        c_idx = storage.load_cluster_index()
         dim = len(query_vector)
-        cluster_vectors = self.storage.load_cluster_vectors(best_cluster_id, cluster_index[best_cluster_id], dim)
+        vecs = storage.load_cluster_vectors(best_id, c_idx[best_id], dim)
         
-        # 4. Search in Cluster
-        results = []
-        for i, vec in enumerate(cluster_vectors):
-            score = cosine_similarity(query_vector, vec)
-            results.append((score, i))
+        res = []
+        for i, v in enumerate(vecs):
+            score = cosine_similarity(query_vector, v)
+            res.append((score, i))
+        res.sort(key=lambda x: x[0], reverse=True)
         
-        results.sort(key=lambda x: x[0], reverse=True)
-        top_results = results[:top_k]
+        # 3. Carregamento de Metadados (Lazy Load)
+        if self.s3_client:
+            resp = self.s3_client.get_object(Bucket=self.s3_bucket, Key=meta_path)
+            meta_data = json.loads(resp['Body'].read().decode('utf-8'))
+        else:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta_data = json.load(f)
         
-        # 5. Retrieve Metadata
-        global_offset = sum(cluster_index[i][1] for i in range(best_cluster_id))
-            
-        if not self.metadata:
-            if not self._load_metadata():
-                return []
-
+        global_offset = sum(c_idx[i][1] for i in range(best_id))
+        
         final_output = []
-        for score, local_idx in top_results:
-            global_idx = global_offset + local_idx
-            meta = self.metadata.get(global_idx)
-            if meta:
-                content = meta["content"]
+        for score, local_idx in res[:top_k]:
+            g_idx = global_offset + local_idx
+            m = meta_data.get(str(g_idx))
+            if m:
+                content = m["content"]
+                # Expansão de Contexto
                 if margin_chars > 0:
-                    prev_meta = self.metadata.get(global_idx - 1)
-                    next_meta = self.metadata.get(global_idx + 1)
-                    prefix = prev_meta["content"][-margin_chars:] if prev_meta else ""
-                    suffix = next_meta["content"][:margin_chars] if next_meta else ""
-                    content = f"{prefix}{content}{suffix}"
-
+                    p = meta_data.get(str(g_idx-1), {}).get("content", "")[-margin_chars:] if g_idx > 0 else ""
+                    s = meta_data.get(str(g_idx+1), {}).get("content", "")[:margin_chars]
+                    content = f"{p}{content}{s}"
+                
                 final_output.append({
                     "score": score,
                     "content": content,
-                    "metadata": meta["metadata"],
-                    "cluster_id": meta["cluster_id"]
+                    "metadata": m["metadata"]
                 })
         return final_output
