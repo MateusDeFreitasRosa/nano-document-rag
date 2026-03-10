@@ -144,63 +144,81 @@ class NanoDocumentRAG:
 
     def search(self, document_id, query_vector, top_k=3, margin_chars=0):
         """
-        Busca os trechos mais similares dentro de um documento específico.
+        Busca os trechos mais similares dentro de um ou mais documentos específicos.
+        
+        Args:
+            document_id: String com um único ID ou Lista de strings com múltiplos IDs.
+            query_vector: Vetor da query (List[float]).
+            top_k: Número de resultados globais.
+            margin_chars: Quantidade de caracteres para expandir (vizinhos).
         """
-        vlog_path, meta_path = self._get_paths(document_id)
+        # Normaliza document_id para sempre ser uma lista
+        doc_ids = [document_id] if isinstance(document_id, str) else document_id
         
-        # Inicializa Storage (Modo Local ou S3 Range Request)
-        storage = Storage(vlog_path, s3_client=self.s3_client, s3_bucket=self.s3_bucket)
-        
-        # 1. Busca Centróide
-        centroids = storage.load_centroids()
-        if not centroids: return []
-        
-        best_id = -1
-        max_sim = -1.0
-        for i, c in enumerate(centroids):
-            sim = cosine_similarity(query_vector, c)
-            if sim > max_sim:
-                max_sim = sim
-                best_id = i
-        
-        if best_id == -1: return []
-        
-        # 2. Busca no Cluster
-        c_idx = storage.load_cluster_index()
-        dim = len(query_vector)
-        vecs = storage.load_cluster_vectors(best_id, c_idx[best_id], dim)
-        
-        res = []
-        for i, v in enumerate(vecs):
-            score = cosine_similarity(query_vector, v)
-            res.append((score, i))
-        res.sort(key=lambda x: x[0], reverse=True)
-        
-        # 3. Carregamento de Metadados (Lazy Load)
-        if self.s3_client:
-            resp = self.s3_client.get_object(Bucket=self.s3_bucket, Key=meta_path)
-            meta_data = json.loads(resp['Body'].read().decode('utf-8'))
-        else:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta_data = json.load(f)
-        
-        global_offset = sum(c_idx[i][1] for i in range(best_id))
-        
-        final_output = []
-        for score, local_idx in res[:top_k]:
-            g_idx = global_offset + local_idx
-            m = meta_data.get(str(g_idx))
-            if m:
-                content = m["content"]
-                # Expansão de Contexto
-                if margin_chars > 0:
-                    p = meta_data.get(str(g_idx-1), {}).get("content", "")[-margin_chars:] if g_idx > 0 else ""
-                    s = meta_data.get(str(g_idx+1), {}).get("content", "")[:margin_chars]
-                    content = f"{p}{content}{s}"
+        all_results = []
+
+        for doc_id in doc_ids:
+            vlog_path, meta_path = self._get_paths(doc_id)
+            
+            # Inicializa Storage (Modo Local ou S3 Range Request)
+            storage = Storage(vlog_path, s3_client=self.s3_client, s3_bucket=self.s3_bucket)
+            
+            try:
+                # 1. Busca Centróide
+                centroids = storage.load_centroids()
+                if not centroids: continue
                 
-                final_output.append({
-                    "score": score,
-                    "content": content,
-                    "metadata": m["metadata"]
-                })
-        return final_output
+                best_id = -1
+                max_sim = -1.0
+                for i, c in enumerate(centroids):
+                    sim = cosine_similarity(query_vector, c)
+                    if sim > max_sim:
+                        max_sim = sim
+                        best_id = i
+                
+                if best_id == -1: continue
+                
+                # 2. Busca no Cluster
+                c_idx = storage.load_cluster_index()
+                dim = len(query_vector)
+                vecs = storage.load_cluster_vectors(best_id, c_idx[best_id], dim)
+                
+                res = []
+                for i, v in enumerate(vecs):
+                    score = cosine_similarity(query_vector, v)
+                    res.append((score, i))
+                
+                # 3. Carregamento de Metadados (Lazy Load)
+                if self.s3_client:
+                    resp = self.s3_client.get_object(Bucket=self.s3_bucket, Key=meta_path)
+                    meta_data = json.loads(resp['Body'].read().decode('utf-8'))
+                else:
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta_data = json.load(f)
+                
+                global_offset = sum(c_idx[i][1] for i in range(best_id))
+                
+                for score, local_idx in res:
+                    g_idx = global_offset + local_idx
+                    m = meta_data.get(str(g_idx))
+                    if m:
+                        content = m["content"]
+                        # Expansão de Contexto
+                        if margin_chars > 0:
+                            p = meta_data.get(str(g_idx-1), {}).get("content", "")[-margin_chars:] if g_idx > 0 else ""
+                            s = meta_data.get(str(g_idx+1), {}).get("content", "")[:margin_chars]
+                            content = f"{p}{content}{s}"
+                        
+                        all_results.append({
+                            "score": score,
+                            "content": content,
+                            "metadata": m["metadata"],
+                            "document_id": doc_id # Identifica de qual documento veio o resultado
+                        })
+            except Exception as e:
+                print(f"⚠️ Erro ao buscar no documento '{doc_id}': {e}")
+                continue
+        
+        # Ordena todos os resultados de todos os documentos pelo score e pega os top_k
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        return all_results[:top_k]
