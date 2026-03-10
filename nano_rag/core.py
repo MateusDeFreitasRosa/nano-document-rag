@@ -36,9 +36,9 @@ class NanoRAG:
         Gera o índice vetorial para este documento com cálculo automático de clusters.
         
         Args:
-            embeddings: Lista de vetores (List[List[float]])
-            contents: Lista de strings (List[str])
-            metadatas: Lista opcional de dicionários de metadados (List[dict])
+            embeddings: Lista de vetores (List[List[float]]) usados para a busca.
+            contents: Lista de strings (List[str]) que representam o chunk.
+            metadatas: Lista opcional de dicionários de metadados (List[dict]).
         """
         if not embeddings:
             return
@@ -109,13 +109,14 @@ class NanoRAG:
             
         print(f"Indexação do documento '{self.document_id}' concluída.")
 
-    def search(self, query_vector, top_k=3):
+    def search(self, query_vector, top_k=3, margin_chars=0):
         """
         Busca os trechos mais similares dentro deste documento.
         
         Args:
             query_vector: Vetor da query (List[float]).
             top_k: Número de resultados.
+            margin_chars: Quantidade de caracteres para expandir (vizinhos).
         """
         # 1. Load Centroids
         centroids = self.storage.load_centroids()
@@ -175,10 +176,22 @@ class NanoRAG:
         for score, local_idx in top_results:
             global_idx = global_offset + local_idx
             meta = self.metadata.get(global_idx)
+            
             if meta:
+                content = meta["content"]
+                
+                # Expansão Dinâmica de Contexto (Vizinhos)
+                if margin_chars > 0:
+                    prev_meta = self.metadata.get(global_idx - 1)
+                    next_meta = self.metadata.get(global_idx + 1)
+                    
+                    prefix = prev_meta["content"][-margin_chars:] if prev_meta else ""
+                    suffix = next_meta["content"][:margin_chars] if next_meta else ""
+                    content = f"{prefix}{content}{suffix}"
+
                 final_output.append({
                     "score": score,
-                    "content": meta["content"],
+                    "content": content,
                     "metadata": meta["metadata"],
                     "cluster_id": meta["cluster_id"]
                 })
