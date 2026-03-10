@@ -1,85 +1,98 @@
 # 🚀 NanoDocumentRAG
 
-Uma biblioteca Python **ultra-lightweight** para RAG (Retrieval-Augmented Generation) focada em documentos individuais e otimizada para ambientes **Serverless (AWS Lambda)**.
+Uma biblioteca Python **ultra-lightweight** para RAG (Retrieval-Augmented Generation) focada em **documentos individuais** e otimizada para ambientes **Serverless (AWS Lambda)**.
 
-O **NanoDocumentRAG** utiliza uma estratégia de busca por centróides ($O(\log N)$) e armazenamento binário customizado (`.vlog`) para garantir performance máxima com consumo mínimo de memória.
+O objetivo do **NanoDocumentRAG** é oferecer um motor de busca vetorial que não dependa de infraestruturas pesadas. Ele permite que você gerencie seus documentos como arquivos isolados, armazenando-os localmente ou diretamente no **Amazon S3**, realizando buscas ultra-eficientes sem carregar o banco inteiro na memória.
 
 ---
 
-## 💡 Por que usar o NanoDocumentRAG?
+## 🎯 Por que NanoDocumentRAG?
 
 *   **Zero Heavy Libs:** Sem NumPy, Pandas ou FAISS. Apenas Python standard library.
-*   **Foco em Documentos:** Cada documento gera seu próprio índice físico isolado.
-*   **Serverless Friendly:** Cold start zero e baixíssimo uso de RAM.
-*   **Contextual Expansion:** Expansão dinâmica de contexto (janela de vizinhos) na hora da busca.
-*   **Cálculo Automático:** Otimização automática de clusters ($K = \sqrt{N}$).
+*   **Foco em Documentos:** Cada documento é um índice físico isolado (`.vlog` + `.json`).
+*   **S3 Native:** Busca no S3 usando *Range Requests* (baixa apenas os bytes necessários).
+*   **Smart Append:** Adicione novos dados a documentos existentes com re-clusterização automática.
+*   **Contextual Expansion:** Expanda o contexto da busca dinamicamente (pega trechos dos vizinhos).
+*   **Serverless Ready:** Cold start zero, ideal para AWS Lambda e instâncias pequenas.
 
 ---
 
 ## 📦 Instalação
 
 ```bash
+# Apenas o Core (Local/EFS)
 pip install git+https://github.com/MateusDeFreitasRosa/nano-rag.git
+
+# Com suporte a S3 (AWS)
+pip install "nano-document-rag[aws] @ git+https://github.com/MateusDeFreitasRosa/nano-rag.git"
 ```
 
 ---
 
-## 🛠️ Como Usar
+## 🛠️ Como Usar: Caso de Uso Completo
 
-### 1. Indexação (Processo Offline)
-Nesta etapa, você gera o índice vetorial para um documento específico. Você deve fornecer os embeddings e os textos já processados.
+### 1. Preparação e Indexação (Processo Offline)
+Ideal para rodar em um SageMaker, GitHub Action ou máquina local.
 
 ```python
-from nano_rag import NanoDocumentRAG
+from nano_rag import NanoDocumentRAG, smart_chunk_text
 
-# Configurações
-doc_id = "manual_tecnico_v1"
-storage = "./meu_storage"
+# 1. Configura o storage (pode ser local ou S3)
+rag = NanoDocumentRAG(
+    storage_dir="meus_indices",
+    s3_bucket="meu-bucket-rag" # Opcional: ativa upload automático
+)
 
-# Dados (Ex: vindos de uma API de Embedding)
-embeddings = [[0.1, 0.2, ...], [0.3, 0.4, ...]]
-chunks = ["O NanoDocumentRAG é eficiente.", "Ideal para AWS Lambda."]
-metadatas = [{"page": 1}, {"page": 2}] # Opcional
+# 2. Prepara o texto (Smart Chunking preserva palavras completas)
+texto = "O NanoDocumentRAG é eficiente..."
+chunks = smart_chunk_text(texto, max_chars=500, overlap=100)
 
-# Inicializa e indexa
-rag = NanoDocumentRAG(document_id=doc_id, storage_dir=storage)
-rag.index(embeddings, chunks, metadatas)
-# Isso gera: ./meu_storage/manual_tecnico_v1.vlog e .json
+# 3. Gera embeddings (use sua API de preferência)
+# embeddings = openai_client.embeddings.create(input=chunks, ...)
+embeddings = [[0.1, 0.2, ...], ...] 
+
+# 4. Cria o documento (ou adiciona dados a um existente)
+rag.create_or_replace_document("manual_tecnico_v1", embeddings, chunks)
+# rag.add_to_document("manual_tecnico_v1", novos_embeddings, novos_chunks)
 ```
 
-### 2. Busca com Expansão de Contexto (Processo Online)
-Na hora de buscar, você pode definir uma margem de caracteres para incluir o contexto dos chunks vizinhos.
+### 2. Busca de Alta Performance (Processo Online)
+Ideal para rodar em AWS Lambda. A lib busca apenas o necessário via rede.
 
 ```python
+import boto3
 from nano_rag import NanoDocumentRAG
 
-# Carrega o motor para o documento
-rag = NanoDocumentRAG(document_id="manual_tecnico_v1", storage_dir="./meu_storage")
+# Injeta o cliente S3 (já disponível no Lambda)
+s3 = boto3.client('s3')
 
-# Vetor da query (gerado pelo mesmo modelo da indexação)
+rag = NanoDocumentRAG(
+    storage_dir="meus_indices",
+    s3_client=s3,
+    s3_bucket="meu-bucket-rag"
+)
+
+# Busca em um ou mais documentos simultaneamente
 query_vector = [0.15, 0.25, ...]
-
-# Busca com expansão de 200 caracteres para cada lado (vizinhos)
-results = rag.search(query_vector, top_k=3, margin_chars=200)
+results = rag.search(
+    document_id=["manual_tecnico_v1", "contrato_v2"],
+    query_vector=query_vector,
+    top_k=3,
+    margin_chars=200 # Expande o contexto com 200 caracteres dos vizinhos
+)
 
 for res in results:
-    print(f"Score: {res['score']:.4f}")
-    print(f"Conteúdo (Expandido): {res['content']}")
-    print(f"Metadata: {res['metadata']}")
-    print("-" * 20)
+    print(f"Documento: {res['document_id']} | Score: {res['score']:.4f}")
+    print(f"Conteúdo: {res['content']}")
 ```
 
 ---
 
 ## 📂 Estrutura de Armazenamento
 
-Para cada documento indexado, o NanoDocumentRAG cria dois arquivos:
-
-1.  **`{document_id}.vlog`**: Arquivo binário (`float32`) contendo os vetores e centróides. Otimizado para leitura parcial via *disk seek*.
-2.  **`{document_id}.json`**: Arquivo de metadados contendo os textos originais e informações extras.
-
----
+*   **`{doc_id}.vlog`**: Binário (`float32`) com vetores e centróides. Suporta *disk seek*.
+*   **`{doc_id}.json`**: Metadados e textos originais.
 
 ## ⚙️ Requisitos
 *   Python 3.7+
-*   Zero dependências externas.
+*   `boto3` (opcional, apenas para uso com S3)
