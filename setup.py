@@ -6,8 +6,16 @@ setup(
     packages=find_packages(),
     install_requires=[], 
     extras_require={
-        "aws": ["boto3"],
-        "all": ["boto3"]
+        "aws": [
+            "boto3>=1.26.0",
+            "botocore>=1.29.0",
+            "s3transfer>=0.6.0"
+        ],
+        "all": [
+            "boto3>=1.26.0",
+            "botocore>=1.29.0",
+            "s3transfer>=0.6.0"
+        ]
     },
     author="Mateus de Freitas Rosa",
     description="Uma biblioteca ultra-lightweight para RAG focada em documentos e otimizada para AWS Lambda",
